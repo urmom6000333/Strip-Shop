@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Modern Shop</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <script src="https://js.stripe.com/v3/"></script>
+  <style>
+    .product-img { transition: box-shadow 0.2s; }
+    .product-img:hover { box-shadow: 0 0 0 4px #0d6efd44; }
+    .edit-overlay {
+      position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+      background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 1000;
+    }
+    .edit-modal {
+      background: #fff; padding: 2em; border-radius: 10px; max-width: 400px; width: 100%;
+      box-shadow: 0 8px 40px #0003;
+    }
+    .edit-modal img { max-width: 100%; margin-bottom: 1em; }
+    #admin-bar {
+      background: #f8f9fa; border-bottom: 1px solid #e3e3e3;
+      padding: 0.5em 0; margin-bottom: 1.5em;
+      display: flex; gap: 1em; align-items: center;
+    }
+  </style>
+</head>
+<body class="bg-light">
+  <div id="admin-bar" class="container">
+    <button id="admin-login-btn" class="btn btn-outline-dark btn-sm">Admin Login</button>
+    <span id="admin-status" class="text-muted">Not logged in</span>
+    <button id="admin-logout-btn" class="btn btn-outline-secondary btn-sm" style="display:none;">Logout</button>
+  </div>
+
+  <div class="container py-5">
+    <h2 class="mb-4">Modern Shop</h2>
+    <div id="products" class="row"></div>
+    <div class="mt-4">
+      <h4>Cart Total: $<span id="total">0.00</span></h4>
+      <button id="checkoutBtn" class="btn btn-primary">Checkout</button>
+    </div>
+    <div id="result" class="mt-3"></div>
+  </div>
+
+  <div id="edit-overlay" class="edit-overlay" style="display:none;">
+    <div class="edit-modal">
+      <h5>Edit Item</h5>
+      <img id="edit-img-preview" src="" alt="Item Preview" />
+      <input type="file" accept="image/*" id="edit-img-input" class="form-control mb-3"/>
+      <label for="edit-desc-input" class="form-label">Description:</label>
+      <textarea id="edit-desc-input" class="form-control mb-3" rows="2"></textarea>
+      <label for="edit-price-input" class="form-label">Price (USD):</label>
+      <input id="edit-price-input" type="number" min="0" step="0.01" class="form-control mb-3"/>
+      <div class="d-flex justify-content-between">
+        <button id="edit-save-btn" class="btn btn-primary">Save</button>
+        <button id="edit-cancel-btn" class="btn btn-secondary">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const stripe = Stripe("pk_live_51RZ5t1AxHsai90CYF4QjGkg62sx5kVguBdNmK5tH8KX8Kpigpb2Yk8YS0g0CDjkJ2LMx92J5UpsJc0fagBApHMZq00mfW3gsRa"); // 🔁 replace with your real pk_test key
+    const ADMIN_PASSWORD = "computers";
+    const products = [
+      { id: 1, name: "T-shirt", price: 20.00, image: "https://images.unsplash.com/photo-1512436991641-6745cdb1723f?w=400", description: "A comfy T-shirt." },
+      { id: 2, name: "Hat", price: 15.00, image: "https://images.unsplash.com/photo-1465101046530-73398c7f28ca?w=400", description: "A stylish hat." },
+      { id: 3, name: "Mug", price: 10.00, image: "https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=400", description: "A cool mug for your drinks." }
+    ];
+    let cart = [];
+    let isAdmin = false;
+    let editingIndex = null;
+
+    function renderProducts() {
+      const productsDiv = document.getElementById('products');
+      productsDiv.innerHTML = "";
+      products.forEach((prod, idx) => {
+        productsDiv.innerHTML += `
+          <div class="col-12 col-sm-6 col-md-4 mb-4">
+            <div class="card h-100 shadow">
+              <img src="${prod.image}" alt="${prod.name}" loading="lazy"
+                   class="card-img-top product-img"
+                   ${isAdmin ? `onclick="openEditModal(${idx})" title="Click to edit"` : ""}>
+              <div class="card-body">
+                <h5 class="card-title">${prod.name}</h5>
+                <p class="card-text">${prod.description}</p>
+                <p class="card-text fw-bold">$${prod.price.toFixed(2)}</p>
+                <button class="btn btn-outline-primary" onclick="addToCart(${prod.id})">Add to cart</button>
+                <span class="ms-2 badge bg-secondary">${getCartQty(prod.id) || ""}</span>
+              </div>
+            </div>
+          </div>
+        `;
+      });
+      updateCartTotal();
+    }
+
+    function getCartQty(id) {
+      const item = cart.find(i => i.id === id);
+      return item ? item.quantity : 0;
+    }
+
+    window.addToCart = function(id) {
+      const item = cart.find(i => i.id === id);
+      if (item) item.quantity++;
+      else cart.push({ id, quantity: 1 });
+      renderProducts();
+    }
+
+    function updateCartTotal() {
+      let total = 0;
+      cart.forEach(item => {
+        const prod = products.find(p => p.id === item.id);
+        total += prod.price * item.quantity;
+      });
+      document.getElementById('total').innerText = total.toFixed(2);
+    }
+
+    window.openEditModal = function(idx) {
+      if (!isAdmin) return;
+      editingIndex = idx;
+      document.getElementById('edit-img-preview').src = products[idx].image;
+      document.getElementById('edit-desc-input').value = products[idx].description;
+      document.getElementById('edit-price-input').value = products[idx].price.toFixed(2);
+      document.getElementById('edit-img-input').value = '';
+      document.getElementById('edit-overlay').style.display = 'flex';
+    };
+
+    document.getElementById('edit-img-input').addEventListener('change', function(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = function(ev) {
+        document.getElementById('edit-img-preview').src = ev.target.result;
+      };
+      reader.readAsDataURL(file);
+    });
+
+    document.getElementById('edit-save-btn').onclick = function() {
+      if (editingIndex === null) return;
+      const imgSrc = document.getElementById('edit-img-preview').src;
+      const desc  = document.getElementById('edit-desc-input').value;
+      let newPrice = parseFloat(document.getElementById('edit-price-input').value);
+      if (isNaN(newPrice) || newPrice < 0) { alert("Enter a valid price."); return; }
+      Object.assign(products[editingIndex], { image: imgSrc, description: desc, price: newPrice });
+      renderProducts(); closeEditModal();
+    };
+
+    document.getElementById('edit-cancel-btn').onclick = closeEditModal;
+    function closeEditModal() {
+      editingIndex = null;
+      document.getElementById('edit-overlay').style.display = 'none';
+    }
+
+    document.getElementById('admin-login-btn').onclick = function() {
+      const pass = prompt("Enter admin password:");
+      if (pass === ADMIN_PASSWORD) { isAdmin = true; updateAdminBar(); }
+      else if (pass !== null) alert("Incorrect password!");
+    };
+
+    document.getElementById('admin-logout-btn').onclick = function() {
+      isAdmin = false;
+      cart = [];
+      updateAdminBar();
+    };
+
+    function updateAdminBar() {
+      document.getElementById('admin-status').textContent = isAdmin ? "Logged in as Admin" : "Not logged in";
+      document.getElementById('admin-login-btn').style.display = isAdmin ? "none" : "";
+      document.getElementById('admin-logout-btn').style.display = isAdmin ? "" : "none";
+      document.getElementById('checkoutBtn').disabled = isAdmin;
+      renderProducts();
+    }
+
+    document.getElementById('checkoutBtn').onclick = async function() {
+      if (cart.length === 0) return alert("Add some items to cart!");
+      document.getElementById('result').textContent = "Redirecting to checkout...";
+
+      const lineItems = cart.map(item => {
+        const prod = products.find(p => p.id === item.id);
+        return {
+          price_data: {
+            currency: "usd",
+            product_data: { name: prod.name, description: prod.description },
+            unit_amount: Math.round(prod.price * 100)
+          },
+          quantity: item.quantity
+        };
+      });
+
+      try {
+        const res = await fetch('/create-checkout-session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ lineItems })
+        });
+
+        const data = await res.json();
+        if (data.url) window.location.href = data.url;
+        else throw new Error("No checkout URL returned");
+
+      } catch (err) {
+        document.getElementById('result').textContent = "Checkout error: " + err.message;
+      }
+    };
+
+    renderProducts();
+  </script>
+</body>
+</html>

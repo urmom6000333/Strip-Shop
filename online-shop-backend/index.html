@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Modern Shop - Editable Items (Admin Only)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <script src="https://js.stripe.com/v3/"></script>
+  <style>
+    .product-img { cursor: pointer; transition: box-shadow 0.2s; }
+    .product-img:hover { box-shadow: 0 0 0 4px #0d6efd44; }
+    .edit-overlay {
+      position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+      background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 1000;
+    }
+    .edit-modal {
+      background: #fff; padding: 2em; border-radius: 10px; max-width: 400px; width: 100%;
+      box-shadow: 0 8px 40px #0003;
+    }
+    .edit-modal img { max-width: 100%; margin-bottom: 1em; }
+    #admin-bar {
+      background: #f8f9fa; border-bottom: 1px solid #e3e3e3;
+      padding: 0.5em 0; margin-bottom: 1.5em;
+      display: flex; gap: 1em; align-items: center;
+    }
+  </style>
+</head>
+<body class="bg-light">
+  <div id="admin-bar" class="container" style="display:flex;">
+    <button id="admin-login-btn" class="btn btn-outline-dark btn-sm">Admin Login</button>
+    <span id="admin-status" class="text-muted">Not logged in</span>
+    <button id="admin-logout-btn" class="btn btn-outline-secondary btn-sm" style="display:none;">Logout</button>
+  </div>
+  <div class="container py-5">
+    <h2 class="mb-4">Modern Shop</h2>
+    <div id="products" class="row"></div>
+    <div class="mt-4">
+      <h4>Cart Total: $<span id="total">0.00</span></h4>
+      <button id="checkoutBtn" class="btn btn-primary">Checkout</button>
+    </div>
+    <div id="payment-section" style="display:none; margin-top:2em;">
+      <h4>Enter Payment Details</h4>
+      <form id="payment-form">
+        <div id="card-element" class="mb-3"></div>
+        <button class="btn btn-success" id="submit-payment">Pay</button>
+        <div id="card-errors" class="text-danger mt-2"></div>
+      </form>
+    </div>
+    <div id="result" class="mt-3"></div>
+  </div>
+
+  <!-- Edit Modal (hidden by default, appears on image click) -->
+  <div id="edit-overlay" class="edit-overlay" style="display:none;">
+    <div class="edit-modal">
+      <h5>Edit Item</h5>
+      <img id="edit-img-preview" src="" alt="Item" class="mb-2"/>
+      <input type="file" accept="image/*" id="edit-img-input" class="form-control mb-3"/>
+      <label for="edit-desc-input" class="form-label">Description:</label>
+      <textarea id="edit-desc-input" class="form-control mb-3" rows="2"></textarea>
+      <label for="edit-price-input" class="form-label">Price (USD):</label>
+      <input id="edit-price-input" type="number" min="0" step="0.01" class="form-control mb-3"/>
+      <div class="d-flex justify-content-between">
+        <button id="edit-save-btn" class="btn btn-primary">Save</button>
+        <button id="edit-cancel-btn" class="btn btn-secondary">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Config: Your admin password (set to "computers")
+    const ADMIN_PASSWORD = "computers";
+
+    // Product list with images and descriptions
+    const products = [
+      {
+        id: 1,
+        name: "T-shirt",
+        price: 20.00,
+        image: "https://images.unsplash.com/photo-1512436991641-6745cdb1723f?w=400",
+        description: "A comfy T-shirt."
+      },
+      {
+        id: 2,
+        name: "Hat",
+        price: 15.00,
+        image: "https://images.unsplash.com/photo-1465101046530-73398c7f28ca?w=400",
+        description: "A stylish hat."
+      },
+      {
+        id: 3,
+        name: "Mug",
+        price: 10.00,
+        image: "https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=400",
+        description: "A cool mug for your drinks."
+      }
+    ];
+
+    let cartTotal = 0;
+    let stripe, elements, cardElement, clientSecret;
+    let editingIndex = null;
+    let isAdmin = false;
+
+    function renderProducts() {
+      const productsDiv = document.getElementById('products');
+      productsDiv.innerHTML = "";
+      products.forEach((prod, idx) => {
+        productsDiv.innerHTML += `
+          <div class="col-12 col-sm-6 col-md-4 mb-4">
+            <div class="card h-100 shadow">
+              <img src="${prod.image}" class="card-img-top product-img" 
+                   alt="${prod.name}" title="${isAdmin ? "Click to edit photo/description/price" : ""}" 
+                   ${isAdmin ? `onclick="openEditModal(${idx})"` : ""}
+                   style="height:220px;object-fit:cover;${isAdmin ? "" : "cursor:default;"}">
+              <div class="card-body">
+                <h5 class="card-title">${prod.name}</h5>
+                <p class="card-text">${prod.description || ""}</p>
+                <p class="card-text fw-bold">$${prod.price.toFixed(2)}</p>
+                <button class="btn btn-outline-primary" onclick="addToCart(${prod.id})">Add to cart</button>
+              </div>
+            </div>
+          </div>
+        `;
+      });
+    }
+
+    window.addToCart = function(id) {
+      const prod = products.find(p => p.id === id);
+      cartTotal += prod.price;
+      document.getElementById('total').innerText = cartTotal.toFixed(2);
+    }
+
+    // --- Editable Image, Description & Price Modal Logic ---
+    window.openEditModal = function(idx) {
+      if (!isAdmin) return;
+      editingIndex = idx;
+      document.getElementById('edit-img-preview').src = products[idx].image;
+      document.getElementById('edit-desc-input').value = products[idx].description || "";
+      document.getElementById('edit-price-input').value = products[idx].price.toFixed(2);
+      document.getElementById('edit-img-input').value = '';
+      document.getElementById('edit-overlay').style.display = 'flex';
+    };
+
+    document.getElementById('edit-img-input').addEventListener('change', function(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = function(ev) {
+        document.getElementById('edit-img-preview').src = ev.target.result;
+      };
+      reader.readAsDataURL(file);
+    });
+
+    document.getElementById('edit-save-btn').onclick = function() {
+      if (editingIndex === null) return;
+      // Save image
+      const imgSrc = document.getElementById('edit-img-preview').src;
+      products[editingIndex].image = imgSrc;
+      // Save description
+      products[editingIndex].description = document.getElementById('edit-desc-input').value;
+      // Save price
+      let newPrice = parseFloat(document.getElementById('edit-price-input').value);
+      if (isNaN(newPrice) || newPrice < 0) {
+        alert("Please enter a valid price.");
+        return;
+      }
+      products[editingIndex].price = newPrice;
+      renderProducts();
+      closeEditModal();
+    };
+    document.getElementById('edit-cancel-btn').onclick = closeEditModal;
+    function closeEditModal() {
+      editingIndex = null;
+      document.getElementById('edit-overlay').style.display = 'none';
+    }
+
+    // --- Admin login/logout logic ---
+    function updateAdminBar() {
+      document.getElementById('admin-status').textContent = isAdmin ? "Logged in as Admin" : "Not logged in";
+      document.getElementById('admin-login-btn').style.display = isAdmin ? "none" : "";
+      document.getElementById('admin-logout-btn').style.display = isAdmin ? "" : "none";
+      renderProducts();
+    }
+
+    document.getElementById('admin-login-btn').onclick = function() {
+      const pass = prompt("Enter admin password:");
+      if (pass === ADMIN_PASSWORD) {
+        isAdmin = true;
+        updateAdminBar();
+      } else if (pass !== null) {
+        alert("Incorrect password!");
+      }
+    };
+    document.getElementById('admin-logout-btn').onclick = function() {
+      isAdmin = false;
+      updateAdminBar();
+    };
+
+    // --- Stripe logic (unchanged) ---
+    document.getElementById('checkoutBtn').onclick = async function() {
+      if (cartTotal === 0) return alert("Add some items to cart!");
+      document.getElementById('result').textContent = "Processing payment intent...";
+      const amountInCents = Math.round(cartTotal * 100);
+      try {
+        const response = await fetch('http://localhost:4242/create-payment-intent', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ amount: amountInCents, currency: 'usd' })
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          document.getElementById('result').textContent = "Error: " + (data.error || response.statusText);
+        } else {
+          document.getElementById('result').textContent = "";
+          clientSecret = data.clientSecret;
+          showStripeForm();
+        }
+      } catch (err) {
+        document.getElementById('result').textContent = "Fetch error: " + err.message;
+      }
+    }
+
+    function showStripeForm() {
+      document.getElementById('payment-section').style.display = '';
+      if (!stripe) {
+        stripe = Stripe('pk_test_51RZ5t1AxHsai90CYI77H2rVtN9PpnicYFb47cfM1ZVqdD4e9eta2OfSyi4HTQCmvNJ3PvnnYlDBB7XLSEOAPWW0n00XV3bsoBp');
+        elements = stripe.elements();
+        cardElement = elements.create('card');
+        cardElement.mount('#card-element');
+      }
+    }
+
+    document.getElementById('payment-form').addEventListener('submit', async function(event) {
+      event.preventDefault();
+      document.getElementById('card-errors').textContent = "";
+      const {error, paymentIntent} = await stripe.confirmCardPayment(clientSecret, {
+        payment_method: {
+          card: cardElement
+        }
+      });
+      if (error) {
+        document.getElementById('card-errors').textContent = error.message;
+      } else if (paymentIntent && paymentIntent.status === 'succeeded') {
+        document.getElementById('result').textContent = "Payment successful! 🎉";
+        document.getElementById('payment-section').style.display = 'none';
+        cartTotal = 0;
+        document.getElementById('total').innerText = "0.00";
+      }
+    });
+
+    // Initial render
+    updateAdminBar();
+  </script>
+</body>
+</html>
